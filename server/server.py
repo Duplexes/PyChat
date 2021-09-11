@@ -46,8 +46,9 @@ class Server:
         self.client_threads: list[threading.Thread] = []
         self.commands = commands(server=self)
         self.stop_event = threading.Event()
-        self.input_thread = NonBlockingInput(callback=self.input, daemon=False)
+        self.input_thread = NonBlockingInput(callback=self.input, daemon=True)
         self.input_thread.start()
+        input()
 
     def start(self, host: str = '', port: int = 6675):
         self.host = host
@@ -74,7 +75,6 @@ class Server:
             except Exception as exception:
                 self.output(f"Exception: {exception}")
         else:
-            print('\r')
             self.send_to_clients(string)
 
     def output(self, message: str):

@@ -12,7 +12,7 @@ class commands:
         print(commands.default.__doc__)
 
     # @staticmethod
-    def start(self, host, port, *args):
+    def start(self, host = '', port = 6675, *args):
         """Start hosting."""
         self.server.start(host, int(port))
 
