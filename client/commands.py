@@ -1,5 +1,5 @@
 import shlex
-from server import Server
+from client import Client
 
 
 class Commands:
@@ -9,7 +9,7 @@ class Commands:
             self.ui: UI = ui
         except ImportError:
             self.ui = ui
-        self.server = Server(self)
+        self.client = Client(self)
 
     def input(self, value: str):
         try:
@@ -18,7 +18,7 @@ class Commands:
                 if command and not command[0].startswith('_'):
                     getattr(self, command[0], self.default)(*command[1:])
             else:
-                self.server.send_to_clients(value)
+                self.client.send(value)
         except Exception as exception:
             self.ui.output(exception)
 
@@ -40,16 +40,11 @@ class Commands:
                 if not member.startswith('_'):
                     self.ui.output('\t' + str(member))
 
-    def host(self, host = '', port = 6675, *args):
-        """Start hosting."""
-        self.server.start(host, int(port))
-
-    def stop(self, *args):
-        """Stop the server."""
-        self.server.stop()
-        self.ui.stop()
+    def join(self, host: str, port: int, name: str, *args):
+        """Join a server."""
+        self.client.join(host, port, name)
 
     def exit(self, *args):
         """Forcefully exit."""
-        self.server.exit()
+        self.client.exit()
         self.ui.stop()

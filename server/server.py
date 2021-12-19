@@ -1,12 +1,6 @@
 import socket
-import threading
-import shlex
+from threading import Thread, Event
 from pyngrok import ngrok
-from pyco import utils, color, prefix, NonBlockingInput
-from pyco import print_message as print
-from commands import commands
-
-prefix.CHAT = f'{color.DEFAULT_MESSAGE_COLOR}[{color.Fore.BRIGHT_BLACK}CHAT{color.DEFAULT_MESSAGE_COLOR}]{color.RESET}'
 
 
 class Client:
@@ -14,8 +8,7 @@ class Client:
         self.host = host
         self.port = port
         self.sock = sock
-        self.char_limit = 64
-        self.nickname = self.get_nickname()
+        self.name = self.get_name()
 
     def send(self, data: str, *args, encoding: str = 'utf-8'):
         self.sock.send(data.encode(encoding), *args)
@@ -23,76 +16,70 @@ class Client:
     def receive(self, *args, encoding: str = 'utf-8') -> str:
         if not args:
             args = (4096,)
-        data = self.sock.recv(*args).decode(encoding)
-        if len(data) > self.char_limit:
-            data = data[:self.char_limit]
-        return utils.remove_ansi(data)
+        return self.sock.recv(*args).decode(encoding)
 
-    def get_nickname(self) -> str:
+    def get_name(self) -> str:
         self.send('NICKNAME_REQUEST')
         return self.receive()
 
-    # def send_file(self, filename: str, *args, encoding: str = 'utf-8'):
-    #     with open(filename, 'rb') as file:
-    #         self.send(file.read(), *args, encoding=encoding)
-
-    # def receive_file(self):
-    #     pass
-
 
 class Server:
-    def __init__(self, sock: socket.socket = None):
-        self.nickname = "Server"
-        self.sock = sock if sock is not None else socket.socket()
-        self.sock.settimeout(1)
-        self.clients: list[Client] = []
-        self.client_threads: list[threading.Thread] = []
-        self.commands = commands(server=self)
-        self.stop_event = threading.Event()
-        self.input_thread = NonBlockingInput(callback=self.input, daemon=True)
-        self.input_thread.start()
-        print(f"{prefix.INFO} Server started.")
-        input()
+    def __init__(self, commands, sock: socket.socket = None):
+        try:
+            from commands import Commands
+            self.commands: Commands = commands
+        except ImportError:
+            self.commands = commands
+        try:
+            self.name = "Server"
+            self.sock = sock if sock is not None else socket.socket()
+            self.sock.settimeout(1)
+            self.clients: list[Client] = []
+            self.client_threads: list[Thread] = []
+            self.stop_event = Event()
+            self.idle_thread = Thread(target=self._idle, daemon=False, name='IdleThread')
+            self.idle_thread.start()
+            self.listener_thread = Thread(target=self.accept_clients, daemon=True, name='ListenerThread')
+            self.commands.output("Server initialized")
+        except Exception as exception:
+            self.commands.output(exception)
 
-    def start(self, host: str = '', port: int = 6675):
-        self.host = host
-        self.port = port
-        self.sock.bind((self.host, self.port))
-        self.sock.listen()
-        public_url = str(ngrok.connect(self.port, 'tcp', options={'remote_addr': f'{self.host}:{self.port}'}).public_url)
-        self.remote_host = public_url.split('//')[1].split(':')[0]
-        self.remote_port = public_url.split(':')[2]
-        self.output(f"{prefix.INFO} Local host: {self.host if self.host != '' else 'localhost'}")
-        self.output(f"{prefix.INFO} Local port: {self.port}")
-        self.output(f"{prefix.INFO} Remote host: {self.remote_host}")
-        self.output(f"{prefix.INFO} Remote port: {self.remote_port}")
-        self.accept_clients()
+    def _idle(self):
+        while not self.stop_event.is_set():
+            pass
+
+    def start(self, host: str = 'localhost', port: int = 6675):
+        try:
+            self.host = host
+            self.port = port
+            self.sock.bind((self.host, self.port))
+            self.sock.listen()
+            public_url = str(ngrok.connect(self.port, 'tcp', options={'remote_addr': f'{self.host}:{self.port}'}).public_url)
+            self.remote_host = public_url.split('//')[1].split(':')[0]
+            self.remote_port = public_url.split(':')[2]
+            self.commands.output("Server started")
+            self.commands.output(f"Local host: {self.host if self.host != '' else 'localhost'}")
+            self.commands.output(f"Local port: {self.port}")
+            self.commands.output(f"Remote host: {self.remote_host}")
+            self.commands.output(f"Remote port: {self.remote_port}")
+            self.listener_thread.start()
+        except Exception as exception:
+            self.commands.output(exception)
 
     def stop(self):
+        self.send_to_clients("Server closed")
+        self.commands.output("Server closed")
         self.stop_event.set()
         self.sock.close()
 
-    def input(self, string: str):
-        if string.startswith('/'):
-            try:
-                self.command(string)
-            except Exception as exception:
-                self.output(f"{prefix.ERROR} Exception: {exception}")
-        else:
-            self.send_to_clients(string)
-
-    def output(self, message: str):
-        print(message)
-
-    def command(self, command: str):
-        command = shlex.split(command[1:])
-        if command:
-            getattr(self.commands, command[0], self.commands.default)(*command[1:])
+    def exit(self):
+        self.stop_event.set()
+        raise SystemExit
 
     def send_to_clients(self, data: str, clients: list[Client] = [], *args, encoding: str = 'utf-8'):
         if not clients:
             clients = self.clients
-        self.output(f'{prefix.CHAT} {data}')
+        self.commands.output(data)
         for client in clients:
             client.send(data, *args, encoding=encoding)
 
@@ -101,21 +88,21 @@ class Server:
             try:
                 connection, address = self.sock.accept()
                 client = Client(host=address[0], port=address[1], sock=connection)
-                if client.nickname in [client.nickname for client in self.clients]:
-                    self.output(f"{prefix.ERROR} Failed to connect with client '{client.nickname}' {client.host}:{client.port}: Nickname already exists")
-                    client.send(f"Connection refused: nickname {client.nickname} already exists")
+                if client.name in [client.name for client in self.clients]:
+                    self.commands.output(f"Failed to connect with client '{client.name}' {client.host}:{client.port}: Nickname already exists")
+                    client.send(f"Connection refused: nickname {client.name} already exists")
                     client.sock.close()
                 else:
-                    self.output(f"{prefix.INFO} Established connection with client: '{client.nickname}' {client.host}:{client.port}")
+                    self.commands.output(f"Established connection with client: '{client.name}' {client.host}:{client.port}")
                     self.clients.append(client)
-                    self.send_to_clients(f"{client.nickname} joined")
-                    thread = threading.Thread(target=self.handle_client, args=(client,), name=f'clnthndlr-{client.nickname}', daemon=True)
+                    self.send_to_clients(f"{client.name} joined")
+                    thread = Thread(target=self.handle_client, args=(client,), name=f'clnthndlr-{client.name}', daemon=True)
                     self.client_threads.append(thread)
                     thread.start()
             except OSError:
                 pass
             except Exception as exception:
-                self.output(f"{prefix.ERROR} Exception: {exception}")
+                self.commands.output(f"Exception: {exception}")
                 self.stop()
 
     def handle_client(self, client: Client):
@@ -130,9 +117,5 @@ class Server:
             except Exception as exception:
                 client.sock.close()
                 self.clients.remove(client)
-                self.send_to_clients(f'{client.nickname} left due to error: {exception}')
+                self.send_to_clients(f"{client.name} left due to error: {exception}")
                 break
-
-
-if __name__ == '__main__':
-    server = Server()

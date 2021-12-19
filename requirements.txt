@@ -1,4 +1,4 @@
-requests
 pyngrok
 pyco
 PySimpleGUI
+PyCryptodome
